@@ -51,14 +51,38 @@ def detect_injection(user_input: str) -> InputStatus:
     Returns:
         ``"BLOCK"`` if injection detected (chặn), ``"ALLOW"`` otherwise (cho qua).
     """
+    # Normalize: fold Unicode variation selectors + zero-width joiners + soft hyphens
+    normalized = user_input.encode('ascii', 'ignore').decode('ascii')
+    # Also replace zero-width space and similar
+    normalized = re.sub(r'[​-‏﻿͏]', '', normalized)
+
     INJECTION_PATTERNS = [
-        # TODO: Add at least 5 regex patterns
-        # Example:
-        # r"ignore (all )?(previous|above) instructions",
+        # 1. Ignore previous/above instructions
+        r'ignore\s+(all\s+)?(previous|above|prior)\s+instructions',
+        # 2. "You are now" / "You are a"
+        r'you\s+are\s+now\s+',
+        r'you\s+are\s+a[/\s]',
+        # 3. System prompt leak attempts
+        r'system\s+(instruction|prompt|role)',
+        # 4. Reveal instructions/prompt
+        r'reveal\s+(your\s+)?(instructions|prompt|system)',
+        r'(show|tell)\s+me\s+your\s+(system\s+)?prompt',
+        # 5. Pretend / act as unrestricted
+        r'pretend\s+(you\s+are|i\s+am)',
+        r'act\s+as\s+(a|an)?\s*unrestricted',
+        r'(ignore|disregard|bypass)\s+(all\s+)?safety',
+        # 6. DAN / jailbreak variants
+        r'\bDAN\b',
+        # 7. Deceptive roleplay
+        r'new\s+(persona|identity|character)',
+        # 8. Primary directive override
+        r'(your\s+)?primary\s+(instruction|directive|objective)',
+        # 9. Embedded instructions in email/RAG
+        r'(execute|run|perform)\s+this\s+(instruction|command|action)',
     ]
 
     for pattern in INJECTION_PATTERNS:
-        if re.search(pattern, user_input, re.IGNORECASE):
+        if re.search(pattern, normalized, re.IGNORECASE):
             return "BLOCK"
     return "ALLOW"
 
@@ -86,12 +110,18 @@ def topic_filter(user_input: str) -> InputStatus:
     """
     input_lower = user_input.lower()
 
-    # TODO: Implement logic:
-    # 1. If input contains any blocked topic -> return "BLOCK"
-    # 2. If input doesn't contain any allowed topic -> return "BLOCK"
-    # 3. Otherwise -> return "ALLOW"
+    # 1. Check blocked topics first
+    for blocked in BLOCKED_TOPICS:
+        if blocked in input_lower:
+            return "BLOCK"
 
-    pass  # Replace with your implementation
+    # 2. Check if input contains any allowed topic
+    for allowed in ALLOWED_TOPICS:
+        if allowed in input_lower:
+            return "ALLOW"
+
+    # 3. No allowed topic found -> block
+    return "BLOCK"
 
 
 # ============================================================
@@ -144,14 +174,22 @@ class InputGuardrailPlugin(base_plugin.BasePlugin):
         self.total_count += 1
         text = self._extract_text(user_message)
 
-        # TODO: Implement logic:
-        # 1. Call detect_injection(text)
-        #    - If "BLOCK": increment blocked_count, return self._block_response("...")
-        # 2. Call topic_filter(text)
-        #    - If "BLOCK": increment blocked_count, return self._block_response("...")
-        # 3. If both return "ALLOW": return None (let message through)
+        # 1. Check for injection
+        if detect_injection(text) == "BLOCK":
+            self.blocked_count += 1
+            return self._block_response(
+                "Tin nhắn của bạn bị chặn vì chứa nội dung không được phép."
+            )
 
-        pass  # Replace with your implementation
+        # 2. Check topic filter
+        if topic_filter(text) == "BLOCK":
+            self.blocked_count += 1
+            return self._block_response(
+                "Xin lỗi, tôi chỉ có thể hỗ trợ các câu hỏi về dịch vụ ngân hàng VinBank."
+            )
+
+        # 3. Both checks passed -> let message through
+        return None
 
 
 # ============================================================
